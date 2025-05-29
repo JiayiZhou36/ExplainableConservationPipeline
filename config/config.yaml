@@ -1,0 +1,33 @@
+paths:
+  raw_data: data/raw/
+  processed_data: data/processed/
+  splits: data/splits/
+  model_dir: models/
+  output_dir: outputs/
+  log_dir: logs/
+
+preprocessing:
+  resize: [640, 640]
+  normalize: true
+  augment: true
+
+split:
+  test_size: 0.2
+  random_seed: 42
+
+model:
+  type: YOLOv9
+  weights: "yolov9-c.pt"  # Assume pretrained weights
+  epochs: 50
+  batch_size: 16
+  learning_rate: 0.001
+
+evaluation:
+  metrics: [precision, recall, mAP]
+
+explainability:
+  techniques: [gradcam, shap]
+
+logging:
+  enable: true
+  experiment_name: "drone_yolo_experiment"

@@ -1,0 +1,152 @@
+# .github/workflows/main.yaml
+
+name: MLOps Drone Image Object Detection Pipeline
+
+on:
+  push:
+    branches:
+      - main # Triggers on push to main branch
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  run-ml-pipeline:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9'] # Specify Python version
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        # For YOLOv9, you might need to install from a specific source or clone a repo
+        # For simplicity, we assume requirements.txt handles it or it's part of the project.
+        # e.g., pip install yolov9  (if available on PyPI)
+        # or git clone https://github.com/WongKinYiu/yolov9.git && cd yolov9 && pip install -r requirements.txt && cd ..
+
+    - name: Set up MLflow
+      run: |
+        pip install mlflow
+        # In a real scenario, you'd configure MLflow tracking URI, e.g., to a remote server
+        # For this example, MLflow will log to local `mlruns` directory
+        export MLFLOW_TRACKING_URI=file:./mlruns 
+        # You might also need to set credentials if using a remote server
+        # export MLFLOW_TRACKING_USERNAME=...
+        # export MLFLOW_TRACKING_PASSWORD=...
+      # Note: For a persistent MLflow server, you'd typically use a separate service
+      # or a managed MLflow offering. For local runs or CI, `file:./mlruns` is fine.
+
+    - name: Create necessary directories
+      run: |
+        mkdir -p data/raw/images data/raw/annotations
+        mkdir -p data/processed/train/images data/processed/train/labels
+        mkdir -p data/processed/val/images data/processed/val/labels
+        mkdir -p data/processed/test/images data/processed/test/labels
+        mkdir -p models
+        mkdir -p outputs/metrics outputs/explanations
+        # Add dummy data for the pipeline to run (replace with your actual data handling)
+        echo "Creating dummy image and annotation for pipeline demonstration"
+        touch data/raw/images/drone_image_001.jpg
+        echo "0 0.5 0.5 0.2 0.2" > data/raw/annotations/drone_image_001.txt # Class 0, cx, cy, w, h
+
+    - name: Run Data Ingestion
+      run: |
+        python scripts/data_ingestion.py \
+          --raw_image_dir data/raw/images \
+          --raw_annotation_dir data/raw/annotations \
+          --output_log outputs/data_ingestion_log.txt
+      # This script would typically fetch data, validate it, and prepare for preprocessing.
+
+    - name: Run Preprocessing
+      id: preprocess_step
+      run: |
+        python scripts/preprocess.py \
+          --image_dir data/raw/images \
+          --annotation_dir data/raw/annotations \
+          --output_image_dir data/processed/images \
+          --output_label_dir data/processed/labels \
+          --img_size 640
+        # This script preprocesses images and annotations.
+        # For simplicity, we assume it places all processed files into a single dir first,
+        # then split_data.py will organize them into train/val/test.
+        # A more robust approach would be for preprocess.py to handle splits or work with split_data.py more closely.
+        # For now, let's assume preprocess.py prepares data that split_data.py can then use.
+        # Let's adjust the assumption: preprocess.py outputs to a general 'processed' location,
+        # and split_data.py takes from there.
+        # For this YAML, let's assume preprocess.py directly prepares some data that split_data.py can use.
+        # The script paths for processed data will be handled within the python scripts.
+
+    - name: Run Data Splitting
+      run: |
+        python scripts/split_data.py \
+          --source_image_dir data/raw/images \
+          --source_label_dir data/raw/annotations \
+          --output_base_dir data/processed \
+          --train_ratio 0.7 \
+          --val_ratio 0.15
+        # Test ratio will be 1.0 - train_ratio - val_ratio
+
+    - name: Run Model Training (YOLOv9)
+      id: train_model
+      run: |
+        python scripts/train.py \
+          --data_config_path scripts/drone_data.yaml \
+          --img_size 640 \
+          --batch_size 8 \
+          --epochs 10 \
+          --weights 'yolov9-c.pt' \
+          --output_model_path models/yolov9_drone_best.pt \
+          --project_name 'drone_detection' \
+          --run_name 'yolov9_training_run'
+        # This is a placeholder for actual YOLOv9 training.
+        # It would use the data from data/processed/
+        # drone_data.yaml would point to train/val/test sets and specify number of classes.
+
+    - name: Run Model Evaluation
+      run: |
+        python scripts/evaluate.py \
+          --model_path models/yolov9_drone_best.pt \
+          --data_config_path scripts/drone_data.yaml \
+          --img_size 640 \
+          --batch_size 8 \
+          --conf_thres 0.25 \
+          --iou_thres 0.45 \
+          --output_dir outputs/metrics \
+          --project_name 'drone_detection' \
+          --run_name 'yolov9_evaluation_run'
+
+    - name: Run Explainability
+      run: |
+        python scripts/explain.py \
+          --model_path models/yolov9_drone_best.pt \
+          --image_path data/processed/test/images/drone_image_001.jpg \
+          --output_dir outputs/explanations \
+          --project_name 'drone_detection' \
+          --run_name 'yolov9_explainability_run'
+        # This script would generate explainability reports/visualizations.
+        # Note: drone_image_001.jpg needs to exist in the test set after splitting.
+        # We'll ensure split_data.py can handle a single file for testing purposes.
+
+    - name: Archive MLflow runs and other outputs
+      if: always() # Run this step even if previous steps fail
+      uses: actions/upload-artifact@v3
+      with:
+        name: ml-pipeline-artifacts
+        path: |
+          mlruns/
+          models/
+          outputs/
+          # Add any other logs or artifacts you want to save
+
+    - name: Display structure of artifact for verification
+      if: always()
+      run: ls -R
